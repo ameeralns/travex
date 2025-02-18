@@ -1,0 +1,98 @@
+# Secrets and environment variables
+.env
+*.env
+.env.*
+credentials.json
+config.json
+*_key.json
+*_keys.json
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.priv
+
+# Scraped data and cache
+cache/
+vendor/
+bin/
+webdata/
+gmapsdata/
+*.csv
+*.json
+!example-queries.txt
+
+# Go specific
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+
+# Python specific
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Temporary files
+*.log
+*.tmp
+.DS_Store
+.idea/
+.vscode/
+__debug_bin
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup
+*~
+*.swp
+*.swo
+
+# Docker
+docker-compose.override.yml
+*.env.docker
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Project specific
+*.csv
+*.db
+gmapsdata/ 
