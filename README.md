@@ -1,103 +1,129 @@
-# Travex - Location Vector Database
+# TravEx - AI-Powered Travel Guide Voice Assistant 🌎 🗣️
 
-A vector database for places and locations, powered by Pinecone and OpenAI embeddings. This project processes location data scraped from Google Maps using [google-maps-scraper](https://github.com/gosom/google-maps-scraper) and creates searchable vector embeddings for use in AI-powered local recommendations and travel assistance.
+TravEx is an intelligent voice-based travel guide that helps users discover and learn about places in real-time through natural conversation. Built with advanced AI capabilities, it provides personalized recommendations while maintaining context and natural dialogue flow.
 
-## Features
+## 🌟 Features
 
-- Creates vector embeddings for locations using OpenAI's text-embedding-ada-002 model
-- Integrates with google-maps-scraper for data collection
-- Stores rich metadata including:
-  - Place details (name, category, address)
-  - Contact information
-  - Ratings and reviews
-  - Operating hours
-  - Price levels
-  - Geographic coordinates
-  - Google Maps links
-  - Images and thumbnails
+- **Natural Voice Interaction**: Engage in natural conversations about places and recommendations
+- **Context-Aware Responses**: System maintains conversation context for more relevant suggestions
+- **Smart Place Discovery**: Uses semantic search to find relevant places based on user preferences
+- **Real-Time Adaptation**: Adjusts recommendations based on user feedback and preferences
+- **Intelligent Interruption Handling**: Allows users to interrupt and redirect the conversation naturally
+- **Location-Aware**: Provides geographically relevant recommendations
+- **Multi-Aspect Understanding**: Handles queries about various aspects (price, hours, atmosphere, etc.)
 
-## Prerequisites
+## 🛠️ Technology Stack
+
+- **Voice Processing**: Twilio for voice calls and speech processing
+- **Text-to-Speech**: ElevenLabs for natural voice generation
+- **Language Understanding**: OpenAI GPT-4 for natural language processing
+- **Vector Search**: Pinecone for semantic search and place discovery
+- **Backend**: Python Flask for API handling
+- **Data Storage**: Vector database for efficient place information retrieval
+
+## 📋 Prerequisites
 
 - Python 3.8+
 - OpenAI API key
-- Pinecone API key and environment
-- [google-maps-scraper](https://github.com/gosom/google-maps-scraper) for data collection
-- Scraped location data in CSV format
+- ElevenLabs API key
+- Twilio account and phone number
+- Pinecone API key and index
 
-## Setup
+## 🚀 Getting Started
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/yourusername/travex.git
 cd travex
 ```
 
-2. Install dependencies:
+2. Create and activate virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Create a `.env` file with your API keys:
-```env
-OPENAI_API_KEY=your_openai_api_key
-PINECONE_API_KEY=your_pinecone_api_key
-PINECONE_ENVIRONMENT=your_pinecone_environment
-PINECONE_INDEX_NAME=your_index_name
-```
-
-## Usage
-
-1. First, collect location data using google-maps-scraper:
+4. Set up environment variables:
 ```bash
-# Follow instructions at https://github.com/gosom/google-maps-scraper
+cp .env.example .env
+# Edit .env with your API keys and configuration
 ```
 
-2. Place your scraped CSV file in the project root as `ScrappedCitycopy.csv`
-
-3. Run the embedding creation script:
+5. Initialize the database:
 ```bash
 python create_pinecone_embeddings.py
 ```
 
-The script will:
-- Create a Pinecone index if it doesn't exist
-- Process the CSV data in batches
-- Create embeddings for each location
-- Store the embeddings with metadata in Pinecone
+6. Run the application:
+```bash
+python run.py
+```
 
-## Data Structure
+## 🔧 Configuration
 
-Each vector in the database includes:
-- 1536-dimensional embedding of the location description
-- Metadata including:
-  - Title
-  - Category
-  - Address
-  - Rating and review count
-  - Contact information
-  - Operating hours
-  - Price level
-  - Geographic coordinates
-  - Links to Google Maps and reviews
-  - Thumbnail images
+Create a `.env` file with the following variables:
+```
+OPENAI_API_KEY=your_openai_key
+ELEVENLABS_API_KEY=your_elevenlabs_key
+PINECONE_API_KEY=your_pinecone_key
+PINECONE_ENVIRONMENT=your_pinecone_env
+TWILIO_ACCOUNT_SID=your_twilio_sid
+TWILIO_AUTH_TOKEN=your_twilio_token
+TWILIO_PHONE_NUMBER=your_twilio_number
+```
 
-## Environment Variables
+## 🤝 Contributing
 
-- `OPENAI_API_KEY`: Your OpenAI API key
-- `PINECONE_API_KEY`: Your Pinecone API key
-- `PINECONE_ENVIRONMENT`: Pinecone environment (e.g., "us-east-1")
-- `PINECONE_INDEX_NAME`: Name of your Pinecone index
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details. Here are some ways you can help:
 
-## Security
+- Add new features
+- Improve documentation
+- Report bugs
+- Submit fixes
+- Suggest enhancements
+- Add test cases
 
-- Never commit the `.env` file
-- Keep your API keys secure
-- The `.gitignore` file is configured to exclude sensitive data
+## 📝 Documentation
 
-## License
+- [API Documentation](docs/API.md)
+- [Architecture Overview](docs/ARCHITECTURE.md)
+- [Development Guide](docs/DEVELOPMENT.md)
+- [Testing Guide](docs/TESTING.md)
 
-MIT License
+## 🎯 Roadmap
 
-## Contributing
+- [ ] Multi-language support
+- [ ] User preference persistence
+- [ ] Integration with booking systems
+- [ ] Real-time availability checking
+- [ ] Social features and shared experiences
+- [ ] Mobile app integration
+- [ ] Enhanced accessibility features
 
-Feel free to submit issues and enhancement requests! 
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- OpenAI for GPT-4 API
+- ElevenLabs for voice generation
+- Twilio for voice processing
+- Pinecone for vector search
+- All our contributors and supporters
+
+## 📞 Support
+
+For support, please:
+1. Check the [documentation](docs/)
+2. Search [existing issues](https://github.com/yourusername/travex/issues)
+3. Create a new issue if needed
+
+## 🔐 Security
+
+Please report security vulnerabilities to ameeralns35@gmail.com 
