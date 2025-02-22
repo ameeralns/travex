@@ -122,25 +122,34 @@ def test_search(query_text, expected_category=None, expected_features=None, min_
     query_info = process_user_query(query_text)
     
     # Enhance query info with test parameters
-    query_info['location']['city'] = city
-    if coordinates:
-        query_info['location']['coordinates'] = coordinates
+    query_info['location'] = {
+        'city': city,
+        'coordinates': coordinates
+    }
     if price_preference:
-        query_info['price_preference'] = price_preference
+        query_info['preferences'] = query_info.get('preferences', {})
+        query_info['preferences']['price_level'] = price_preference
     if min_rating:
         query_info['min_rating'] = min_rating
     
     console.print(f"[bold yellow]Processed Query:[/bold yellow]", query_info)
     
     # Test different sorting options
-    sort_options = ['best_match', 'rating_high', 'price_low', 'distance'] if coordinates else ['best_match', 'rating_high', 'price_low']
+    sort_options = ['best_match', 'rating_high', 'price_low']
+    if coordinates:
+        sort_options.append('distance')
     
     results_summary = []
     for sort_by in sort_options:
         console.print(f"\n[bold green]Testing sort_by=[/bold green] {sort_by}")
         
         start_time = time.time()
-        results = search_places(query_info, sort_by=sort_by, limit=5)
+        results = search_places(
+            query_info=query_info,
+            top_k=5,
+            sort_by=sort_by,
+            limit=5
+        )
         search_time = time.time() - start_time
         
         if results:
@@ -154,7 +163,7 @@ def test_search(query_text, expected_category=None, expected_features=None, min_
                 'success': success,
                 'time': search_time,
                 'results_count': len(results),
-                'avg_score': mean(getattr(r, 'combined_score', r.score) for r in results)
+                'avg_score': mean(r['score'] for r in results)
             })
         else:
             console.print("[bold red]No results found![/bold red]")

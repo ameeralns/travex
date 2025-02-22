@@ -8,6 +8,7 @@ import datetime
 import concurrent.futures
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -19,71 +20,199 @@ _available_voices = None
 
 class ConversationContext:
     def __init__(self):
-        self.last_results = []
+        """Initialize conversation context with proper data structures"""
+        # Basic tracking
         self.current_city = None
-        self.last_query_type = None
-        self.last_response = None
-        self.interrupted = False
-        self.speaking_state = None
-        self.current_voice = None
-        # Enhanced context tracking
-        self.conversation_history = []  # List of all queries and responses
-        self.call_start_time = None
-        self.previous_queries = []
-        self.previous_responses = []
-        self.mentioned_places = set()  # Set of all places mentioned in the call
-        self.user_preferences = {}  # Store user preferences learned during the call
-        # New fields for better context
-        self.current_place = None  # Currently being discussed place
-        self.current_topic = None  # Current topic of conversation (e.g., 'place_details', 'searching', 'comparing')
-        self.last_mentioned_places = []  # List of recently mentioned places in order
-        self.discussion_depth = {}  # Track how much we've discussed each place
-        # New fields for search diversity
-        self.shown_places = set()  # Track all places shown to avoid repetition
-        self.rejected_places = set()  # Track places user wasn't interested in
-        self.preferred_places = set()  # Track places user showed interest in
-        self.search_history = []  # Track search queries and their results
-        self.current_search_index = 0  # Track which subset of results we're showing
-        self.remaining_results = []  # Store remaining results for pagination
-        
-    def add_search_results(self, results, query_info):
-        """Add search results and track them for diversity"""
-        # Randomly shuffle results while maintaining relevance groups
-        grouped_results = {}
-        for result in results:
-            score = round(result.score, 1)  # Group by rounded score for similar relevance
-            if score not in grouped_results:
-                grouped_results[score] = []
-            grouped_results[score].append(result)
-        
-        # Shuffle within each relevance group
-        shuffled_results = []
-        for score in sorted(grouped_results.keys(), reverse=True):
-            group = grouped_results[score]
-            random.shuffle(group)
-            shuffled_results.extend(group)
-        
-        # Filter out previously shown places
-        filtered_results = [r for r in shuffled_results if r.id not in self.shown_places]
-        
-        # If we're running low on new places, reset the shown places
-        if len(filtered_results) < 3:
-            self.shown_places.clear()
-            filtered_results = shuffled_results
-        
-        self.last_results = filtered_results[:3]  # Keep first 3 for immediate response
-        self.remaining_results = filtered_results[3:]  # Store rest for pagination
+        self.current_category = None
+        self.current_place = None
+        self.current_results = []
+        self.remaining_results = []
         self.current_search_index = 0
         
-        # Track this search
-        self.search_history.append({
+        # Result tracking
+        self.shown_places = set()
+        self.rejected_places = set()
+        self.preferred_places = set()
+        self.mentioned_places = set()
+        self.place_name_map = {}
+        
+        # Context tracking
+        self.last_mentioned_places = []
+        self.discussion_depth = {}
+        self.category_history = []
+        self.conversation_history = []
+        self.user_preferences = {}
+        
+        # Timestamps
+        self.call_start_time = datetime.datetime.now()
+        self.last_interaction_time = datetime.datetime.now()
+        
+        # Enhanced conversation tracking
+        self.conversation_flow = []  # Track conversation flow and transitions
+        
+        # Place and category tracking
+        self.current_place = None  # Currently being discussed place
+        self.current_category = None  # Current category (hotel, restaurant, etc.)
+        self.category_history = []  # Track category changes
+        self.last_mentioned_places = []  # List of recently mentioned places in order
+        self.discussion_depth = {}  # Track how much we've discussed each place
+        self.place_name_map = {}  # Map place names to IDs
+        
+        # User understanding
+        self.user_interests = set()  # Track what the user seems interested in
+        self.rejected_topics = set()  # Track what the user isn't interested in
+        self.interaction_style = {
+            'verbose': False,  # Does user prefer detailed responses
+            'direct': False,   # Does user prefer direct answers
+            'exploratory': False  # Does user like to explore options
+        }
+        
+        # Search management
+        self.search_history = []  # Track search queries and their results
+        self.current_topic = None  # Current topic of conversation
+        self.topic_history = []  # Track topic changes
+        self.last_action = None  # Last action taken
+        self.pending_questions = []  # Questions we haven't answered yet
+        
+    def update_interaction_style(self, query, response_type):
+        """Learn user's preferred interaction style"""
+        query_lower = query.lower()
+        
+        # Check for verbosity preference
+        if any(phrase in query_lower for phrase in ['tell me more', 'details', 'explain']):
+            self.interaction_style['verbose'] = True
+        elif any(phrase in query_lower for phrase in ['quick', 'brief', 'just']):
+            self.interaction_style['verbose'] = False
+            
+        # Check for directness preference
+        if any(phrase in query_lower for phrase in ['exactly', 'specifically', 'precisely']):
+            self.interaction_style['direct'] = True
+            
+        # Check for exploratory nature
+        if any(phrase in query_lower for phrase in ['what else', 'other options', 'alternatives']):
+            self.interaction_style['exploratory'] = True
+            
+    def add_to_conversation_flow(self, query, response_type, action_taken):
+        """Track conversation flow for better context understanding"""
+        self.conversation_flow.append({
             'timestamp': datetime.datetime.now(),
-            'query_info': query_info,
-            'total_results': len(results),
-            'filtered_results': len(filtered_results)
+            'query': query,
+            'response_type': response_type,
+            'action_taken': action_taken,
+            'category': self.current_category,
+            'topic': self.current_topic
         })
         
-        return self.last_results
+    def should_maintain_context(self, query_lower, intent_analysis):
+        """Enhanced context maintenance decision"""
+        # If we're in the middle of discussing places of a certain category
+        if not self.current_category:
+            return False
+            
+        # Consider conversation flow
+        if self.conversation_flow:
+            last_interaction = self.conversation_flow[-1]
+            # If we were just giving details about a place
+            if last_interaction['action_taken'] == 'get_place_details':
+                return True
+                
+        # Keywords that suggest category change
+        category_change_keywords = [
+            'instead', 'different', 'change', 'switch', 'looking for',
+            'want to find', 'search for', 'find me', 'show me'
+        ]
+        
+        # If query contains explicit category changes, don't maintain
+        if any(keyword in query_lower for keyword in category_change_keywords):
+            return False
+            
+        # Keywords that suggest maintaining context
+        maintain_context_keywords = [
+            'this', 'that', 'it', 'there', 'more about',
+            'tell me more', 'what about', 'how about'
+        ]
+        
+        # Consider intent analysis confidence
+        if intent_analysis and intent_analysis.get('should_maintain_context'):
+            return True
+            
+        return any(keyword in query_lower for keyword in maintain_context_keywords)
+        
+    def update_topic(self, new_topic):
+        """Update conversation topic with history tracking"""
+        if self.current_topic != new_topic:
+            self.topic_history.append({
+                'from_topic': self.current_topic,
+                'to_topic': new_topic,
+                'timestamp': datetime.datetime.now()
+            })
+            self.current_topic = new_topic
+            
+    def get_conversation_context(self):
+        """Get rich conversation context for AI"""
+        return {
+            'city': self.current_city,
+            'current_category': self.current_category,
+            'current_place': self.current_place['metadata'] if self.current_place else None,
+            'current_topic': self.current_topic,
+            'interaction_style': self.interaction_style,
+            'user_preferences': self.user_preferences,
+            'conversation_flow': self.conversation_flow[-3:] if self.conversation_flow else [],
+            'topic_history': self.topic_history[-3:] if self.topic_history else []
+        }
+    
+    def add_search_results(self, results, query_info):
+        """Add search results to conversation context with proper format handling"""
+        try:
+            if not results:
+                return []
+                
+            processed_results = []
+            for result in results:
+                # Handle both dictionary and object formats
+                if isinstance(result, dict):
+                    processed_result = result
+                else:
+                    processed_result = {
+                        'id': result.id,
+                        'metadata': result.metadata,
+                        'score': getattr(result, 'score', 0)
+                    }
+                processed_results.append(processed_result)
+            
+            # Store the first three results for immediate use
+            self.current_results = processed_results[:3]
+            
+            # Store remaining results for future reference
+            self.remaining_results = processed_results[3:]
+            
+            # Reset search index
+            self.current_search_index = 0
+            
+            # Update place tracking
+            for result in self.current_results:
+                self.mentioned_places.add(result['id'])
+                if result.get('metadata', {}).get('title'):
+                    self.place_name_map[result['metadata']['title'].lower()] = result['id']
+            
+            # Set the first result as current place
+            if self.current_results:
+                self.set_current_place(
+                    self.current_results[0]['id'],
+                    self.current_results[0].get('metadata', {})
+                )
+            
+            # Log the results
+            logger.info(f"Added {len(self.current_results)} results to conversation context")
+            if self.current_place:
+                logger.info(f"Current place: {self.current_place.get('metadata', {}).get('title')}")
+            
+            return self.current_results
+            
+        except Exception as e:
+            logger.error(f"Error adding search results: {str(e)}")
+            logger.exception("Full error traceback:")
+            return []
     
     def get_next_results(self, count=3):
         """Get next batch of results, ensuring we don't repeat places"""
@@ -97,7 +226,7 @@ class ConversationContext:
         
         # Track these places as shown
         for result in results:
-            self.shown_places.add(result.id)
+            self.shown_places.add(result['id'])
             
         return results
     
@@ -121,27 +250,42 @@ class ConversationContext:
             'first_mentioned': datetime.datetime.now(),
             'mentioned_count': self.discussion_depth.get(place_id, 0) + 1
         }
-        self.discussion_depth[place_id] = self.discussion_depth.get(place_id, 0) + 1
-        self.shown_places.add(place_id)  # Track that we've shown this place
+        # Update category tracking
+        if 'category' in place_metadata:
+            self.current_category = place_metadata['category']
+            self.category_history.append({
+                'category': place_metadata['category'],
+                'timestamp': datetime.datetime.now()
+            })
         
-        # Keep track of recently mentioned places
+        self.discussion_depth[place_id] = self.discussion_depth.get(place_id, 0) + 1
+        self.shown_places.add(place_id)
+        
         if place_id not in [p['id'] for p in self.last_mentioned_places]:
             self.last_mentioned_places.insert(0, {
                 'id': place_id,
                 'metadata': place_metadata,
                 'timestamp': datetime.datetime.now()
             })
-            # Keep only last 5 mentioned places
             self.last_mentioned_places = self.last_mentioned_places[:5]
     
+    def get_current_category(self):
+        """Get the current category being discussed"""
+        return self.current_category
+
+    def clear_category(self):
+        """Clear the current category when explicitly changing topics"""
+        self.current_category = None
+    
     def get_place_context(self, place_id):
-        """Get context about a specific place"""
+        """Get context for a specific place"""
         if self.current_place and self.current_place['id'] == place_id:
             return self.current_place
-        
+            
         for place in self.last_mentioned_places:
             if place['id'] == place_id:
                 return place
+                
         return None
 
 # Global conversation context
@@ -250,222 +394,280 @@ def chunk_response(text, chunk_size=75):
     # Ensure chunks aren't too small but also not too large
     return [chunk for chunk in chunks if 15 <= len(chunk) <= 100]
 
-def format_place_results(results, query_type='default'):
-    """Format place results into a natural, conversational response"""
-    global conversation_context
-    conversation_context.last_results = results
-    conversation_context.speaking_state = 'results'
-    conversation_context.current_topic = 'place_overview'
-    
-    if not results:
-        if conversation_context.user_preferences:
-            prefs = []
-            if 'price' in conversation_context.user_preferences:
-                prefs.append(conversation_context.user_preferences['price'])
-            if 'cuisine' in conversation_context.user_preferences:
-                prefs.append(', '.join(conversation_context.user_preferences['cuisine']))
-            if prefs:
-                return f"I couldn't find exactly what you're looking for with {' and '.join(prefs)}. Would you like me to broaden the search a bit?"
-        return "I couldn't find anything matching that exactly. Could you tell me more about what you're in the mood for? I know all the best spots!"
-        
-    response_parts = []
-    
-    # Natural, conversational intros based on query type and context
-    if conversation_context.current_place:
-        # If we were just discussing a place, make the transition natural
-        response_parts.append(f"Let me tell you about some other great options besides {conversation_context.current_place['metadata'].get('title')}!")
-    else:
-        # Use context-aware intros
-        intros = {
-            'default': ["I found some fantastic spots I think you'll love!", 
-                       "Oh, I know just the places for you!",
-                       "I've got some great options to share!"],
-            'rating_high': ["Let me tell you about the absolute best places in town!",
-                           "I've found some top-rated spots you're going to love!"],
-            'rating_low': ["I know some hidden gems that are worth checking out!",
-                          "Let me share some local favorites that might surprise you!"],
-            'price_high': ["If you're looking for something upscale, you'll love these places!",
-                          "I've found some excellent fine dining options!"],
-            'price_low': ["I know some great spots that won't break the bank!",
-                         "Let me tell you about some budget-friendly favorites!"],
-            'most_reviews': ["These places are local favorites!",
-                           "Everyone's been raving about these spots!"],
-            'features': ["I found exactly what you're looking for!",
-                        "These places match exactly what you want!"]
-        }
-        response_parts.append(random.choice(intros.get(query_type, intros['default'])))
-    
-    # Add each place with a more natural, conversational description
-    for i, result in enumerate(results[:3], 1):
-        place = result.metadata
-        conversation_context.set_current_place(result.id, place)
-        
-        # Build engaging place description
-        description = []
-        
-        # More natural transitions between places
-        if i == 1:
-            description.append(f"First, there's {place.get('title', 'Unknown')}")
-        elif i == 2:
-            description.append(f"Another great option is {place.get('title', 'Unknown')}")
-        else:
-            description.append(f"And you might also like {place.get('title', 'Unknown')}")
-        
-        # Add key highlights based on place type and user preferences
-        if place.get('category') == 'activity':
-            if place.get('description'):
-                snippet = place.get('description')[:100].rsplit(' ', 1)[0] + '...'
-                description.append(f"It's {snippet}")
-            if place.get('features'):
-                description.append(f"They offer {place.get('features')}")
-        
-        # Add rating and reviews naturally
-        rating = float(place.get('rating', 0))
-        if rating >= 4.5:
-            description.append(f"People absolutely love this place")
-            if place.get('reviews'):
-                description.append(f"with {place.get('reviews')} glowing reviews")
-        elif rating >= 4.0:
-            description.append(f"It's very well-rated")
-            if place.get('reviews'):
-                description.append(f"with {place.get('reviews')} positive reviews")
-        
-        # Add price level with context
-        if place.get('price_level'):
-            price_descriptions = {
-                '$': ["and it's quite budget-friendly", "and won't break the bank"],
-                '$$': ["with moderate prices", "at a reasonable price point"],
-                '$$$': ["for a more upscale experience", "if you're looking for something nicer"],
-                '$$$$': ["for a really special occasion", "if you want to treat yourself"]
-            }
-            description.append(random.choice(price_descriptions.get(place.get('price_level'), [])))
-            
-        # Add location naturally
-        if place.get('address'):
-            street = place.get('address').split(',')[0]
-            description.append(f"You'll find it on {street}")
-            
-        # Add atmosphere if available
-        if place.get('atmosphere'):
-            description.append(place.get('atmosphere'))
-            
-        response_parts.append(". ".join(description))
-    
-    # Add interactive prompt based on context
-    if len(results) > 3:
-        response_parts.append("I have more great places in mind too! Would you like to hear more about any of these first, or shall I continue with other options?")
-    else:
-        response_parts.append("Would you like to know more about any of these places? Just ask about the one you're interested in, and I can tell you about their special features, hours, or anything specific you want to know!")
-    
-    return " ".join(response_parts)
-
-def format_place_details(place_id):
-    """Format detailed information about a specific place"""
-    global conversation_context
-    conversation_context.speaking_state = 'details'
-    conversation_context.current_topic = 'place_details'
-    
-    place_context = conversation_context.get_place_context(place_id)
-    if not place_context:
-        return "I'm not sure which place you're asking about. Would you like me to search for something specific?"
-        
-    place = place_context['metadata']
-    conversation_context.set_current_place(place_id, place)
-    
-    details = []
-    
-    # Create an engaging, detailed description
-    details.append(f"Let me tell you more about {place.get('title', 'this place')}!")
-    
-    # Add rich details based on how much we've discussed this place
-    discussion_count = conversation_context.discussion_depth.get(place_id, 0)
-    
-    if discussion_count <= 1:
-        # First time discussing this place - give overview
-        if place.get('description'):
-            details.append(place.get('description'))
-        
-        if place.get('features'):
-            details.append(f"Some highlights include {place.get('features')}")
-            
-        if place.get('hours'):
-            details.append(f"They're open {place.get('hours')}")
-            
-        if place.get('price_level'):
-            price_desc = {
-                '$': "It's very budget-friendly",
-                '$$': "It's moderately priced",
-                '$$$': "It's on the upscale side",
-                '$$$$': "It's a high-end establishment"
-            }
-            details.append(price_desc.get(place.get('price_level'), ''))
-    else:
-        # We've discussed this place before - give more specific details
-        if place.get('special_events'):
-            details.append(f"They often host {place.get('special_events')}")
-            
-        if place.get('busy_times'):
-            details.append(f"The best times to visit are {place.get('busy_times')}")
-            
-        if place.get('insider_tips'):
-            details.append(f"Here's an insider tip: {place.get('insider_tips')}")
-            
-        if place.get('parking'):
-            details.append(f"For parking, {place.get('parking')}")
-    
-    # Add contact and booking info
-    if place.get('phone'):
-        details.append(f"You can call them at {place.get('phone')} to make a reservation or ask questions")
-        
-    if place.get('website'):
-        details.append(f"Check out their website at {place.get('website')} for more information")
-    
-    # Add interactive prompt based on context
-    details.append("What specific aspect would you like to know more about? I can tell you about their prices, special features, or help you make a reservation!")
-    
-    return " ".join(details)
-
-def handle_place_reference(speech_result):
-    """Handle references to previously mentioned places"""
-    speech_lower = speech_result.lower()
-    
-    # Reference keywords that might indicate user is referring to a place
-    reference_keywords = [
-        'that one', 'this place', 'tell me more', 'more about', 
-        'what about', 'first one', 'second one', 'last one',
-        'can you tell me about', 'what is', 'how is', 'the first',
-        'that first', 'that place', 'this one', 'it', 'that'
+def get_initial_greeting():
+    """Generate initial greeting with personality"""
+    greetings = [
+        "Hi! I'm your local guide. Which city can I help you explore?",
+        "Hello! I'm here to help you discover great places. What city are you interested in?",
+        "Welcome! I'm your personal local guide. Which city would you like to explore?"
     ]
-    
-    # Check if the speech contains any reference keywords
-    contains_reference = any(keyword in speech_lower for keyword in reference_keywords)
-    
-    if contains_reference:
-        # First check if they're referring to the current place
-        if conversation_context.current_place:
-            place_name = conversation_context.current_place['metadata'].get('title', '').lower()
-            if place_name in speech_lower:
-                return conversation_context.current_place['id']
-        
-        # Check for ordinal references
-        if any(word in speech_lower for word in ['first', 'first one', 'that first']):
-            return conversation_context.last_results[0].id if conversation_context.last_results else None
-        elif any(word in speech_lower for word in ['second', 'second one']):
-            return conversation_context.last_results[1].id if len(conversation_context.last_results) > 1 else None
-        elif any(word in speech_lower for word in ['last', 'last one']):
-            return conversation_context.last_results[-1].id if conversation_context.last_results else None
+    return random.choice(greetings)
+
+def get_location_confirmation(city, state=None):
+    """Generate location confirmation with personality"""
+    responses = [
+        f"Great! I know {city} very well. What type of place are you looking for?",
+        f"Excellent choice! I love {city}. What would you like to discover?",
+        f"Perfect! I can help you find the best places in {city}. What interests you?"
+    ]
+    return random.choice(responses)
+
+def get_search_acknowledgment():
+    """Generate search acknowledgment with personality"""
+    responses = [
+        "Just a moment while I find the perfect places for you...",
+        "Let me search for some great options...",
+        "I'll help you find exactly what you're looking for..."
+    ]
+    return random.choice(responses)
+
+def format_place_results(results, conversation_context=None):
+    """Format place results into natural conversation"""
+    try:
+        if not results:
+            return "I couldn't find any places matching your criteria. Would you like to try a different search?"
             
-        # Check recently mentioned places
-        for place in conversation_context.last_mentioned_places:
-            place_name = place['metadata'].get('title', '').lower()
-            if place_name in speech_lower:
-                return place['id']
+        # Get place type for context
+        place_type = results[0]['metadata'].get('category', 'place').lower()
         
-        # If just asking for more details about current topic
-        if conversation_context.current_place and any(word in speech_lower for word in ['more', 'about', 'tell me', 'what else']):
-            return conversation_context.current_place['id']
+        # Special handling for outdoor/trail results
+        if place_type in ['trail', 'park', 'hiking trail', 'outdoor recreation']:
+            intro = "I found some great outdoor spots that might be perfect for you"
+            if conversation_context and conversation_context.has_family_context():
+                intro += " and your family"
+            intro += ". "
             
-    return None
+            details = []
+            for result in results[:3]:
+                place_info = []
+                place_info.append(result['metadata'].get('title', 'this place'))
+                
+                # Add difficulty level if available
+                if 'difficulty' in result['metadata']:
+                    place_info.append(f"it's a {result['metadata']['difficulty']} trail")
+                
+                # Add length if available
+                if 'length' in result['metadata']:
+                    place_info.append(f"about {result['metadata']['length']} long")
+                
+                # Add key features
+                features = []
+                if result['metadata'].get('features'):
+                    feature_list = result['metadata']['features']
+                    if isinstance(feature_list, str):
+                        feature_list = feature_list.split(',')
+                    important_features = [f for f in feature_list if f.lower() in 
+                        ['parking', 'restrooms', 'water fountain', 'playground', 'picnic area']]
+                    if important_features:
+                        features.extend(important_features)
+                
+                if features:
+                    place_info.append(f"with {', '.join(features)}")
+                
+                # Add rating
+                if result['metadata'].get('rating'):
+                    rating = float(result['metadata']['rating'])
+                    if rating >= 4.5:
+                        place_info.append("highly rated by visitors")
+                    elif rating >= 4.0:
+                        place_info.append("well rated by visitors")
+                
+                details.append(". ".join(place_info))
+            
+            response = intro + " " + ". Next, ".join(details) + "."
+            
+            # Add helpful context for families
+            if conversation_context and conversation_context.has_family_context():
+                response += " All these places are family-friendly and have good accessibility."
+            
+            response += " Would you like to know more about any of these places?"
+            
+            return response
+            
+        # Handle other place types with existing logic
+        intro = f"I found some great {place_type}s that you might like. "
+        details = []
+        for result in results[:3]:
+            place_info = []
+            place_info.append(result['metadata'].get('title', 'this place'))
+            
+            if result['metadata'].get('price_level'):
+                place_info.append(f"it's {result['metadata']['price_level']} priced")
+            
+            if result['metadata'].get('rating'):
+                rating = float(result['metadata']['rating'])
+                if rating >= 4.5:
+                    place_info.append("highly rated")
+                elif rating >= 4.0:
+                    place_info.append("well rated")
+            
+            if result['metadata'].get('features'):
+                features = result['metadata']['features']
+                if isinstance(features, str):
+                    features = features.split(',')
+                top_features = features[:2]
+                if top_features:
+                    place_info.append(f"featuring {', '.join(top_features)}")
+            
+            details.append(". ".join(place_info))
+        
+        response = intro + " " + ". Next, ".join(details) + "."
+        response += " Would you like to know more about any of these places?"
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error formatting place results: {str(e)}")
+        return "I found some places that match your criteria. Would you like me to tell you about them?"
+
+def format_place_details(place_metadata):
+    """Format detailed place information conversationally"""
+    response = []
+    
+    # Basic information
+    response.append(f"Let me tell you more about {place_metadata.get('title')}. ")
+    
+    # Location and contact
+    if place_metadata.get('address'):
+        response.append(f"It's located at {place_metadata['address']}. ")
+    if place_metadata.get('phone'):
+        response.append(f"You can reach them at {place_metadata['phone']}. ")
+    
+    # Hours
+    if place_metadata.get('hours'):
+        try:
+            hours = json.loads(place_metadata['hours'])
+            today = datetime.now().strftime('%A')
+            if today in hours:
+                response.append(f"Today they're open {hours[today]}. ")
+        except:
+            pass
+    
+    # Features and amenities
+    if place_metadata.get('about'):
+        try:
+            about = json.loads(place_metadata['about'])
+            features = [feature for feature in about if feature.get('enabled', True)]
+            if features:
+                response.append("Some notable features include: ")
+                response.append(", ".join(f.get('name', '') for f in features[:3]))
+                response.append(". ")
+        except:
+            pass
+    
+    # Reviews and rating
+    if place_metadata.get('rating') and place_metadata.get('review_count'):
+        response.append(
+            f"It has {place_metadata['rating']} stars based on "
+            f"{place_metadata['review_count']} reviews. "
+        )
+    
+    # Add call to action
+    response.append(
+        "Would you like to hear about more places like this, "
+        "or would you like to explore something different?"
+    )
+    
+    return "".join(response)
+
+def handle_farewell():
+    """Generate farewell message"""
+    farewells = [
+        "It was great helping you today! Feel free to ask me about any other places you'd like to discover.",
+        "I enjoyed being your guide! Don't hesitate to ask if you need more recommendations.",
+        "Thanks for letting me help! I'm always here when you need to find great places to visit."
+    ]
+    return random.choice(farewells)
+
+def handle_place_reference(self, speech_result):
+    """Handle references to previously mentioned places"""
+    try:
+        speech_lower = speech_result.lower()
+        logger.info(f"\n=== Processing Place Reference ===")
+        logger.info(f"🎯 Input speech: '{speech_lower}'")
+        
+        # Reference keywords that indicate user is referring to a place
+        reference_keywords = [
+            'that one', 'this place', 'tell me more', 'more about', 
+            'what about', 'first one', 'second one', 'last one', 'third one',
+            'can you tell me about', 'what is', 'how is', 'the first',
+            'that first', 'that place', 'this one', 'it', 'that',
+            'first restaurant', 'second restaurant', 'third restaurant',
+            'first place', 'second place', 'third place'
+        ]
+        logger.info(f"🔍 Checking against {len(reference_keywords)} reference patterns")
+        
+        # Ordinal number mapping (0-based index)
+        ordinal_mapping = {
+            'first': 0, '1st': 0, 'one': 0,
+            'second': 1, '2nd': 1, 'two': 1,
+            'third': 2, '3rd': 2, 'three': 2,
+            'last': -1
+        }
+        
+        # Check if they're referring to the current place
+        if self.current_place and isinstance(self.current_place, dict):
+            current_title = self.current_place.get('metadata', {}).get('title', '').lower()
+            logger.info(f"📍 Current place in context: '{current_title}'")
+            
+            if current_title and (current_title in speech_lower or 
+                any(word in current_title for word in speech_lower.split() if len(word) > 3)):
+                logger.info(f"✅ Matched current place reference: {current_title}")
+                return self.current_place.get('id')
+        else:
+            logger.info("ℹ️ No current place in context")
+        
+        # Check for ordinal references in current results
+        if self.current_results:
+            logger.info(f"🔢 Checking ordinal references against {len(self.current_results)} current results")
+            for ordinal, index in ordinal_mapping.items():
+                if ordinal in speech_lower:
+                    logger.info(f"📊 Found ordinal reference: '{ordinal}' (index: {index})")
+                    if index == -1:
+                        index = len(self.current_results) - 1
+                    if 0 <= index < len(self.current_results):
+                        result = self.current_results[index]
+                        if isinstance(result, dict):
+                            title = result.get('metadata', {}).get('title', '')
+                            logger.info(f"✅ Matched ordinal reference to: {title}")
+                            self.set_current_place(result.get('id'), result.get('metadata', {}))
+                            return result.get('id')
+        else:
+            logger.info("ℹ️ No current results to check ordinal references against")
+        
+        # Check for partial name matches in all results
+        speech_words = [word for word in speech_lower.split() if len(word) > 3]
+        all_results = self.current_results + (self.remaining_results or [])
+        
+        if speech_words:
+            logger.info(f"🔤 Checking partial name matches with words: {speech_words}")
+            
+            for result in all_results:
+                if isinstance(result, dict):
+                    title = result.get('metadata', {}).get('title', '').lower()
+                    if title and any(word in title for word in speech_words):
+                        logger.info(f"✅ Found partial name match: '{title}'")
+                        self.set_current_place(result.get('id'), result.get('metadata', {}))
+                        return result.get('id')
+        
+        # Check place name map for exact matches
+        if hasattr(self, 'place_name_map'):
+            logger.info(f"📚 Checking exact matches in place name map ({len(self.place_name_map)} entries)")
+            for name, place_id in self.place_name_map.items():
+                if name.lower() in speech_lower:
+                    logger.info(f"✅ Found exact name match: '{name}'")
+                    for result in all_results:
+                        if isinstance(result, dict) and result.get('id') == place_id:
+                            self.set_current_place(result.get('id'), result.get('metadata', {}))
+                            return place_id
+        
+        logger.info("❌ No place reference found in speech")
+        return None
+        
+    except Exception as e:
+        logger.error(f"❌ Error handling place reference: {str(e)}")
+        logger.exception("Full error traceback:")
+        return None
 
 def handle_interruption(speech_result):
     """Handle user interruptions and follow-up questions"""
@@ -479,8 +681,17 @@ def handle_interruption(speech_result):
         conversation_context.interrupted = True
         return True, "Of course! I'll pause right there. What would you like to know?"
     
+    # Don't treat place inquiries as interruptions
+    place_inquiry_patterns = [
+        'tell me more about', 'what about', 'can you tell me about',
+        'more information', 'details about', 'tell me about',
+        'first', 'second', 'third', 'last', 'that one'
+    ]
+    if any(pattern in speech_lower for pattern in place_inquiry_patterns):
+        return False, None
+    
     # Check if user is trying to redirect the conversation
-    redirect_patterns = ['but', 'actually', 'instead', 'rather', 'what about', 'can you']
+    redirect_patterns = ['but', 'actually', 'instead', 'rather']
     if any(pattern in speech_lower for pattern in redirect_patterns):
         conversation_context.interrupted = True
         return True, "Let me address that for you instead. What would you like to know?"
@@ -550,20 +761,6 @@ def handle_interruption(speech_result):
                     if rating and reviews:
                         return True, f"It has {rating} stars from {reviews} reviews. Would you like to hear what people specifically love about it?"
                     return True, "Let me check what recent visitors have said about it. Any specific aspects you're curious about?"
-    
-    # Handle comparative questions
-    comparative_patterns = ['better', 'different', 'else', 'another', 'more', 'other', 'similar', 'like this']
-    if any(pattern in speech_lower for pattern in comparative_patterns):
-        if conversation_context.current_place:
-            return True, f"Would you like to hear about other places similar to {conversation_context.current_place['metadata'].get('title')}, or should I look for something completely different?"
-        return True, "I can find you some different options. What specifically are you looking for?"
-    
-    # Handle clarification questions
-    clarification_patterns = ['what', 'why', 'how', 'could you', 'can you', 'tell me']
-    if any(pattern in speech_lower for pattern in clarification_patterns):
-        if conversation_context.current_place:
-            return True, f"Of course! What would you like to know more about {conversation_context.current_place['metadata'].get('title')}?"
-        return True, "I'll be happy to clarify. What specifically would you like to know?"
     
     return False, None
 
@@ -670,22 +867,6 @@ def generate_error_audio(error_message, temp_dir):
     except Exception as e:
         logger.error(f"Failed to generate error audio: {str(e)}")
         return None
-
-def get_initial_greeting():
-    """Get the initial greeting for first-time callers"""
-    # Select a new random voice for this call
-    voice_id = select_random_voice()
-    name = conversation_context.current_voice['name'] if conversation_context.current_voice else "Antoni"
-    
-    return f"Hi! I'm {name}, your local guide. Which city can I help you explore?"
-
-def get_location_confirmation(city, state):
-    """Get confirmation message for location setting"""
-    return f"Ah, {city}! I love it there! What kind of place are you looking for? I know everything from cozy cafes to the hottest bars and best restaurants!"
-
-def get_search_acknowledgment():
-    """Get acknowledgment message for starting a search"""
-    return "Let me find some great spots for you!"
 
 def cleanup_audio_file(file_path):
     """Clean up temporary audio file"""
